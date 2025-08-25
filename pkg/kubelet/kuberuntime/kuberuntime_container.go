@@ -263,6 +263,10 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 		return s.Message(), ErrPreCreateHook
 	}
 
+	// klog.Info("MyDebug(show containerConfig): ", containerConfig)
+	// swapTheTwoEnvarsInContainerConfig(containerConfig)
+	// deleteAllInjectedDevsFromContainerConfig(containerConfig)
+	klog.Info("MyDebug(show containerConfig): ", containerConfig)
 	containerID, err := m.runtimeService.CreateContainer(ctx, podSandboxID, containerConfig, podSandboxConfig)
 	if err != nil {
 		s, _ := grpcstatus.FromError(err)
@@ -326,6 +330,60 @@ func (m *kubeGenericRuntimeManager) startContainer(ctx context.Context, podSandb
 	}
 
 	return "", nil
+}
+
+func deleteTheInjectedDevFromContainerConfig(cfg *runtimeapi.ContainerConfig) {
+	regex := regexp.MustCompile(`^/dev/nvidia[0-9]$`)
+	for i, dev := range cfg.Devices {
+		if regex.MatchString(dev.ContainerPath) {
+			klog.InfoS("MyDebug: Removing the injected device from ContainerConfig", "device", dev.ContainerPath)
+			len := len(cfg.Devices)
+			cfg.Devices[i] = cfg.Devices[len-1]
+			cfg.Devices = cfg.Devices[:len-1]
+			break
+		}
+	}
+}
+
+func deleteAllInjectedDevsFromContainerConfig(cfg *runtimeapi.ContainerConfig) {
+	regex := regexp.MustCompile(`^/dev/nvidia.*`)
+	cleanedDevs := []*runtimeapi.Device{}
+	for _, dev := range cfg.Devices {
+		if regex.MatchString(dev.ContainerPath) {
+			klog.InfoS("MyDebug: Ignoring one injected device from ContainerConfig", "device", dev.ContainerPath)
+			continue
+		}
+		cleanedDevs = append(cleanedDevs, dev)
+	}
+	cfg.Devices = cleanedDevs
+}
+
+func swapTheTwoEnvarsInContainerConfig(cfg *runtimeapi.ContainerConfig) {
+	// there are two instances of NVIDIA_VISIBLE_DEVICES envars intead of one, because
+	// the kubelet injected the first one when handling Container.Resources
+	// and a human wrote the second one in Container.Env
+	indice := []int{}
+	for idx, env := range cfg.Envs {
+		if env.Key == "NVIDIA_VISIBLE_DEVICES" {
+			klog.Info("MyDebug(envar in ContainerConfig): ", env.Key, env.Value)
+			indice = append(indice, idx)
+		}
+	}
+	if len(indice) == 2 {
+		klog.Info("MyDebug: switch two envars")
+		first, firstE := indice[0], cfg.Envs[indice[0]]
+		second, secondE := indice[1], cfg.Envs[indice[1]]
+		tmpE := runtimeapi.KeyValue{Key: firstE.Key, Value: firstE.Value}
+		cfg.Envs[first] = secondE
+		cfg.Envs[second] = &tmpE
+	} else {
+		klog.Infof("MyDebug: there are %d NVIDIA_VISIBLE_DEVICES env var", len(indice))
+	}
+	for _, env := range cfg.Envs {
+		if env.Key == "NVIDIA_VISIBLE_DEVICES" {
+			klog.Info("MyDebug(envar in ContainerConfig): ", env.Key, env.Value)
+		}
+	}
 }
 
 // generateContainerConfig generates container config for kubelet runtime v1.

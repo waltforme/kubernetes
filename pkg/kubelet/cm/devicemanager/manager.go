@@ -832,7 +832,10 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 	// Extended resources are not allowed to be overcommitted.
 	// Since device plugin advertises extended resources,
 	// therefore Requests must be equal to Limits and iterating
-	// over the Limits should be sufficient.
+	// over the Limits should be sufficient in the sense that Requests can be ignored,
+	// but actually not sufficient when user wants not just 'how many devices' but also 'which devices'
+	// e.g. in the vcp use case.
+	// So improvements can be made here to consider user specified NVIDIA_VISIBLE_DEVICES before using the plugin.
 	for k, v := range container.Resources.Limits {
 		resource := string(k)
 		needed := int(v.Value())
@@ -846,7 +849,8 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 			m.UpdateAllocatedDevices()
 			allocatedDevicesUpdated = true
 		}
-		allocDevices, err := m.devicesToAllocate(podUID, contName, resource, needed, devicesToReuse[resource])
+		allocDevices, err := m.devicesToAllocate(podUID, contName, resource, needed, devicesToReuse[resource]) // preferred called here
+		klog.Info("MyDebug(show allocDevices): ", allocDevices)
 		if err != nil {
 			return err
 		}
@@ -882,8 +886,9 @@ func (m *ManagerImpl) allocateContainerResources(pod *v1.Pod, container *v1.Cont
 		devs := allocDevices.UnsortedList()
 		// TODO: refactor this part of code to just append a ContainerAllocationRequest
 		// in a passed in AllocateRequest pointer, and issues a single Allocate call per pod.
-		klog.V(3).InfoS("Making allocation request for device plugin", "devices", devs, "resourceName", resource)
+		klog.V(0).InfoS("MyDebug: Making allocation request for device plugin", "devices", devs, "resourceName", resource)
 		resp, err := eI.e.allocate(devs)
+		klog.Info("MyDebug(show AllocateResponse): ", resp)
 		metrics.DevicePluginAllocationDuration.WithLabelValues(resource).Observe(metrics.SinceInSeconds(startRPCTime))
 		if err != nil {
 			// In case of allocation failure, we want to restore m.allocatedDevices
@@ -1019,8 +1024,9 @@ func (m *ManagerImpl) callGetPreferredAllocationIfAvailable(podUID, contName, re
 	}
 
 	m.mutex.Unlock()
-	klog.V(4).InfoS("Issuing a GetPreferredAllocation call for container", "containerName", contName, "podUID", podUID)
+	klog.V(0).InfoS("MyDebug: Issuing a GetPreferredAllocation call for container", "containerName", contName, "podUID", podUID)
 	resp, err := eI.e.getPreferredAllocation(available.UnsortedList(), mustInclude.UnsortedList(), size)
+	klog.Info("MyDebug(show PreferredAllocationResponse): ", resp)
 	m.mutex.Lock()
 	if err != nil {
 		return nil, fmt.Errorf("device plugin GetPreferredAllocation rpc failed with err: %v", err)
